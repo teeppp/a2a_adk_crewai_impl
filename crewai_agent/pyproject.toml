@@ -1,0 +1,18 @@
+[project]
+name = "crewai-agent"
+version = "0.1.0"
+description = "A2A CrewAI Agent Implementation"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "a2a-samples", # Depend on the workspace package
+    "pyyaml",
+    "uvicorn",
+    "starlette",
+    "sse-starlette",
+    "pydantic",
+    "crewai",      # Add crewai dependency
+]
+
+[tool.uv.sources]
+a2a-samples = { workspace = true } # Define workspace dependency

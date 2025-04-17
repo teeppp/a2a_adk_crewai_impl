@@ -1,0 +1,18 @@
+[project]
+name = "adk-agent"
+version = "0.1.0"
+description = "A2A ADK Agent Implementation"
+readme = "README.md"
+requires-python = ">=3.12" # Match the installed version
+dependencies = [
+    "a2a-samples", # Directly depend on the package name
+    "pyyaml",
+    "uvicorn",
+    "starlette",
+    "sse-starlette",
+    "pydantic",
+    "google-adk",
+]
+
+[tool.uv.sources]
+a2a-samples = { workspace = true } # Define workspace dependency

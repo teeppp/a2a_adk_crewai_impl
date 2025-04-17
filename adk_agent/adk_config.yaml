@@ -1,0 +1,10 @@
+# ADK Agent Configuration
+
+agent_id: "adk-agent-001" # Unique identifier for this agent
+listen_port: 8001        # Port this agent will listen on for A2A connections
+
+# Details of the agent to connect to
+target_agent:
+  agent_id: "crewai-agent-001" # Target agent's ID
+  address: "localhost"         # Target agent's hostname or IP address
+  port: 8002                   # Target agent's listening port
