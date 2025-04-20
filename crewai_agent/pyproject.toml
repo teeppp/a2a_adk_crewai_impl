@@ -5,14 +5,19 @@ description = "A2A CrewAI Agent Implementation"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "a2a-samples", # Depend on the workspace package
+    # "a2a-samples", # Removed, common code is now local
     "pyyaml",
     "uvicorn",
     "starlette",
     "sse-starlette",
     "pydantic",
     "crewai",      # Add crewai dependency
+    # Add dependencies required by the copied 'common' code
+    "httpx>=0.23.0",
+    "httpx-sse>=0.4.0",
+    "jwcrypto>=1.5.6",
+    "pyjwt>=2.10.1",
+    "typing-extensions>=4.12.2",
 ]
 
-[tool.uv.sources]
-a2a-samples = { workspace = true } # Define workspace dependency
+# [tool.uv.sources] section removed as common code is now local
