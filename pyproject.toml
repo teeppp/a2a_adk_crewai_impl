@@ -6,10 +6,3 @@ build-backend = "hatchling.build"
 name = "a2a-adk-crewai-impl-workspace" # Placeholder name for the workspace root
 version = "0.1.0"
 requires-python = ">=3.12"
-
-[tool.uv.workspace]
-members = [
-    "adk_agent",
-    "crewai_agent",
-    "A2A_repo/samples/python"
-]
