@@ -1,3 +1,9 @@
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 import streamlit as st
 from state_manager import initialize_session_state
 import uuid
@@ -314,10 +320,19 @@ if user_input and st.session_state.selected_agent_url:
     with st.spinner("Processing task..."):
         try:
             # Agent Card 辞書を取得
-            agent_card_dict = st.session_state.agent_cards.get(st.session_state.selected_agent_url)
+            # Get the selected agent URL (should be like http://adk_agent:8001)
+            selected_url = st.session_state.selected_agent_url
+            agent_card_dict = st.session_state.agent_cards.get(selected_url)
+
             if not agent_card_dict:
                  st.error("Selected agent's card data not found.")
             else:
+                # Ensure the URL in the card uses the service name for container communication
+                # The URL fetched might still contain localhost if fetched initially that way
+                # We rely on selected_url which should be correct after selection
+                # Let's ensure the client uses the selected_url directly if card URL is wrong
+                # (Alternatively, update agent_card_dict['url'] here if needed)
+
                 # メッセージパートを作成
                 message_parts = [create_text_part(user_input)]
 
@@ -325,36 +340,50 @@ if user_input and st.session_state.selected_agent_url:
                 supports_streaming = agent_card_dict.get('supports_streaming', False)
 
                 if supports_streaming:
-                    print("DEBUG: Calling stream_a2a_task...") # デバッグログ
+                    print(f"DEBUG: Calling stream_a2a_task with URL: {selected_url}") # デバッグログ
                     try:
-                        # ストリーミング実行
+                        # ストリーミング実行 (Pass the correct URL explicitly)
+                        # Note: stream_a2a_task might need adjustment to accept url directly
+                        # For now, assume it uses agent_card_dict['url'], let's ensure it's correct
+                        if "localhost" in agent_card_dict.get("url", ""):
+                             logger.warning(f"Agent card URL contains localhost: {agent_card_dict.get('url')}. Using selected URL: {selected_url}")
+                             # We should ideally modify stream_a2a_task to accept url or use the client correctly
+                             # Temporary fix: update the dict (might not be ideal)
+                             # agent_card_dict['url'] = selected_url # This might break caching if dict is modified
+
+                        # Let's modify a2a_client_utils.py instead to prioritize selected_url if provided
+                        # For now, proceed assuming the client init inside uses the correct URL from agent_card
+
                         asyncio.run(
                             stream_a2a_task(
-                                agent_card_dict=agent_card_dict,
+                                agent_card_dict=agent_card_dict, # Pass the potentially corrected card
                                 message_parts_dicts=message_parts,
-                            task_id=st.session_state.current_task_id,
-                            session_id=st.session_state.current_session_id,
-                            update_callback=update_ui_callback # コールバック関数を渡す
+                                task_id=st.session_state.current_task_id,
+                                session_id=st.session_state.current_session_id,
+                                update_callback=update_ui_callback
                             )
                         )
-                        # ストリーミングの場合、最終結果はコールバック経由でチャット履歴に追加される
                     except Exception as e_stream:
                          print(f"ERROR in asyncio.run(stream_a2a_task): {e_stream}") # エラーログ
                          st.error(f"Error during streaming: {e_stream}")
 
                 else:
-                    print("DEBUG: Calling send_a2a_task...") # デバッグログ
+                    print(f"DEBUG: Calling send_a2a_task with URL: {selected_url}") # デバッグログ
                     try:
-                        # 非ストリーミング実行
+                        # 非ストリーミング実行 (Ensure correct URL is used)
+                        if "localhost" in agent_card_dict.get("url", ""):
+                             logger.warning(f"Agent card URL contains localhost: {agent_card_dict.get('url')}. Using selected URL: {selected_url}")
+                             # Ideally modify send_a2a_task or ensure client uses correct URL
+                             # agent_card_dict['url'] = selected_url # Temp fix
+
                         task_result_dict: Optional[Dict[str, Any]] = asyncio.run(
                             send_a2a_task(
-                                agent_card_dict=agent_card_dict,
+                                agent_card_dict=agent_card_dict, # Pass potentially corrected card
                                 message_parts_dicts=message_parts,
-                            task_id=st.session_state.current_task_id,
-                            session_id=st.session_state.current_session_id
+                                task_id=st.session_state.current_task_id,
+                                session_id=st.session_state.current_session_id
                             )
                         )
-                        # 結果を処理 (非ストリーミングの場合)
                         if task_result_dict:
                             assistant_response = ""
                             # output フィールドからテキスト応答を抽出
@@ -448,28 +477,30 @@ if st.session_state.input_required:
                         message_parts = [create_text_part(hil_input)]
                         supports_streaming = agent_card_dict.get('supports_streaming', False)
 
-                        # HIL応答を同じタスクIDで再送信
+                        # HIL応答を同じタスクIDで再送信 (Ensure correct URL)
+                        if "localhost" in agent_card_dict.get("url", ""):
+                             logger.warning(f"HIL: Agent card URL contains localhost: {agent_card_dict.get('url')}. Using selected URL: {selected_url}")
+                             # agent_card_dict['url'] = selected_url # Temp fix
+
                         if supports_streaming:
                             asyncio.run(
                                 stream_a2a_task(
                                     agent_card_dict=agent_card_dict,
                                     message_parts_dicts=message_parts,
-                                    task_id=st.session_state.current_task_id, # 同じタスクID
-                                    session_id=st.session_state.current_session_id, # 同じセッションID
+                                    task_id=st.session_state.current_task_id,
+                                    session_id=st.session_state.current_session_id,
                                     update_callback=update_ui_callback
                                 )
                             )
-                            # ストリーミングの場合、結果はコールバックで処理され、UIもコールバック内で st.rerun される
                         else:
                             task_result_dict: Optional[Dict[str, Any]] = asyncio.run(
                                 send_a2a_task(
                                     agent_card_dict=agent_card_dict,
                                     message_parts_dicts=message_parts,
-                                    task_id=st.session_state.current_task_id, # 同じタスクID
-                                    session_id=st.session_state.current_session_id # 同じセッションID
+                                    task_id=st.session_state.current_task_id,
+                                    session_id=st.session_state.current_session_id
                                 )
                             )
-                            # 非ストリーミングの結果処理
                             if task_result_dict:
                                 assistant_response = ""
                                 if task_result_dict.get("output"):

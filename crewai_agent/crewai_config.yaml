@@ -6,5 +6,5 @@ listen_port: 8002           # Port this agent will listen on for A2A connections
 # Details of the agent to connect to (Optional for listener, needed for sending)
 target_agent:
   agent_id: "adk-agent-001"    # Target agent's ID
-  address: "localhost"         # Target agent's hostname or IP address
+  address: "adk_agent"         # Use the service name for container communication
   port: 8001                   # Target agent's listening port

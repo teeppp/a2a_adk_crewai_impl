@@ -9,12 +9,13 @@ from typing import Optional, Dict, Any, List
 # --- google_a2a_common ライブラリのインポート ---
 # lib ディレクトリから直接インポート
 try:
-    from lib.google_a2a_common.client.card_resolver import A2ACardResolver
-    from lib.google_a2a_common.client.client import A2AClient
+    # Import from the renamed 'common' directory
+    from common.client.card_resolver import A2ACardResolver
+    from common.client.client import A2AClient
     # types モジュールを別名でインポートして衝突回避
-    from lib.google_a2a_common import types as a2a_types
+    from common import types as a2a_types
     # A2AClientJSONError も types からインポート
-    from lib.google_a2a_common.types import A2AClientJSONError
+    from common.types import A2AClientJSONError
 except ImportError as e:
     logging.error(f"Failed to import google_a2a_common library from lib/: {e}")
     # ここでエラーが発生する場合、コピーが正しく行われていないか、

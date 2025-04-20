@@ -8,7 +8,8 @@ from common.server.task_manager import TaskManager
 import yaml
 import logging
 import uvicorn
-import asyncio # Import asyncio for async operations
+import asyncio
+import os # Import os to read environment variables
 import uuid # Import uuid for generating task IDs
 from common.server.server import A2AServer
 from common.server.task_manager import TaskManager
@@ -33,71 +34,55 @@ class AdkTaskManager(TaskManager):
         # Dummy response for now
         return JSONRPCResponse(id=request.id, result={"status": "Task not found"})
 
-    def __init__(self, config):
-        self.config = config
-        self.client = None # Client will be initialized later
-
-    async def _send_reply(self, original_request: SendTaskRequest):
-        """Sends an independent reply message back to the sender."""
-        try:
-            received_message = original_request.params.message
-            input_text = received_message.parts[0].text if received_message and received_message.parts and isinstance(received_message.parts[0], TextPart) else ""
-
-            # Infinite loop prevention: Don't reply to replies
-            if input_text.startswith("ADK received:") or input_text.startswith("CrewAI processed (mock"):
-                 logger.info("Received a reply message, not sending another reply to prevent loop.")
-                 return
-
-            # --- Simulate ADK processing (Mock) ---
-            logger.info(f"Simulating ADK processing for task {original_request.params.id}")
-            await asyncio.sleep(0.1) # Simulate work
-            response_text = f"ADK received: '{input_text[:30]}...'" # The reply content
-            logger.info(f"ADK processing simulation finished for task {original_request.params.id}")
-            # --- End Mock ADK processing ---
-
-            # Prepare the reply message payload
-            reply_message_payload = Message(
-                role="user", # From the perspective of the receiving agent (CrewAI)
-                parts=[TextPart(text=response_text)]
-            )
-            reply_task_id = f"reply-{uuid.uuid4()}"
-            reply_task_params = {
-                "id": reply_task_id,
-                "message": reply_message_payload.model_dump(exclude_none=True)
-            }
-
-            # Get target info from config (assuming CrewAI is the target)
-            target_config = self.config.get("target_agent")
-            if not target_config:
-                logger.error("Target agent config not found for sending reply.")
-                return
-
-            target_url = f"http://{target_config.get('address', 'localhost')}:{target_config.get('port', 8002)}/"
-
-            # Initialize client if not already done
-            if self.client is None or self.client.url != target_url:
-                 self.client = A2AClient(url=target_url)
-
-            logger.info(f"Sending reply message to {target_url}...")
-            reply_response = await self.client.send_task(reply_task_params)
-            logger.info(f"Received response for reply message: {reply_response.model_dump_json()}")
-
-        except Exception as e:
-            logger.error(f"Error sending reply message: {e}", exc_info=True)
-
+    # Remove __init__ and client as reply sending is removed
 
     async def on_send_task(self, request: SendTaskRequest) -> JSONRPCResponse:
-        """Handles incoming tasks/send requests."""
+        """Handles incoming tasks/send requests and returns the result synchronously."""
         logger.info(f"Received SendTask request: {request.model_dump_json(exclude_none=True)}")
+        task_id = request.params.id
+        session_id = request.params.sessionId
+        received_message = request.params.message
 
-        # Schedule the reply sending in the background
-        asyncio.create_task(self._send_reply(request))
+        # Extract text from the message parts
+        input_text = ""
+        if received_message and received_message.parts:
+            for part in received_message.parts:
+                if isinstance(part, TextPart):
+                    input_text += part.text + "\n"
+        input_text = input_text.strip()
 
-        # Immediately return an acknowledgement response in the expected Task format
-        # History is not included in this initial ack.
-        ack_status = TaskStatus(state=TaskState.SUBMITTED) # Indicate task is received
-        ack_task = Task(id=request.params.id, sessionId=request.params.sessionId, status=ack_status)
-        return JSONRPCResponse(id=request.id, result=ack_task)
+        if not input_text:
+            logger.warning("No text found in the received message.")
+            task_status = TaskStatus(state=TaskState.FAILED, message=received_message)
+            task_result = Task(id=task_id, sessionId=session_id, status=task_status)
+            return JSONRPCResponse(id=request.id, result=task_result)
+
+        try:
+            # --- Simulate ADK processing (Mock) ---
+            logger.info(f"Simulating ADK processing for task {task_id}")
+            await asyncio.sleep(0.1) # Simulate work
+            response_text = f"ADK received: '{input_text[:30]}...'"
+            response_message = Message(role="agent", parts=[TextPart(text=response_text)])
+            logger.info(f"ADK processing simulation finished for task {task_id}")
+            # --- End Mock ADK processing ---
+
+            # Create TaskStatus including the agent's response message
+            task_status = TaskStatus(state=TaskState.COMPLETED, message=response_message) # Set state to COMPLETED
+
+            # Create the history including received message and response
+            history = [received_message, response_message]
+
+        except Exception as e:
+            logger.error(f"Error during ADK simulation for task {task_id}: {e}", exc_info=True)
+            history = [received_message] if received_message else []
+            error_message = Message(role="agent", parts=[TextPart(text=f"Error processing task: {e}")])
+            task_status = TaskStatus(state=TaskState.FAILED, message=error_message)
+            if 'error_message' in locals():
+                 history.append(error_message)
+
+        # Create the final Task object including the history
+        task_result = Task(id=task_id, sessionId=session_id, status=task_status, history=history)
+        return JSONRPCResponse(id=request.id, result=task_result)
 
     async def on_send_task_subscribe(self, request: SendTaskStreamingRequest):
         logger.info(f"Received SendTaskStreaming request: {request.model_dump_json()}")
@@ -173,19 +158,22 @@ async def main():
 
     agent_id = config.get("agent_id", "default-adk-agent")
     listen_port = config.get("listen_port", 8001)
-    target_config = config.get("target_agent") # Keep target config for initial message
+    target_config = config.get("target_agent")
+    # Read public URL from environment variable, fallback to config/default
+    agent_public_url = os.environ.get("AGENT_PUBLIC_URL", f"http://localhost:{listen_port}/")
+    logger.info(f"Using public URL: {agent_public_url}")
 
     # Define the Agent Card
     agent_card = AgentCard(
         name=agent_id,
         description="A sample agent built with Google ADK speaking A2A.",
-        url=f"http://localhost:{listen_port}/",
+        url=agent_public_url, # Use the public URL from env var
         version="0.1.0",
         capabilities=AgentCapabilities(streaming=False, pushNotifications=False, stateTransitionHistory=False),
         skills=[AgentSkill(id="basic-chat", name="Basic Chat", description="Handles basic chat interactions.")]
     )
 
-    task_manager = AdkTaskManager(config) # Pass config to TaskManager
+    task_manager = AdkTaskManager() # Config no longer needed for TaskManager
 
     server = A2AServer(
         host="0.0.0.0",

@@ -4,7 +4,7 @@ import logging
 import uvicorn
 import asyncio
 import uuid
-from functools import partial # For running sync kickoff in thread (if used)
+import os # Import os to read environment variables
 # Assuming we can reuse the common server components
 from common.server.server import A2AServer
 from common.server.task_manager import TaskManager
@@ -18,96 +18,93 @@ from common.types import (
 )
 from common.client.client import A2AClient # Import the client
 
-# Import CrewAI components
+# Import CrewAI components (used conceptually in mock)
 from crewai import Agent, Task as CrewTask, Crew, Process
-# LLM is not used in this mock implementation
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Task Manager that uses CrewAI structure (mock execution) and sends replies
+# Task Manager that uses CrewAI structure (mock execution)
 class CrewAiTaskManager(TaskManager):
-    def __init__(self, config):
-        self.config = config
-        self.client = None # Client will be initialized later
+    # No __init__ needed as config is not used for client here
 
     async def on_get_task(self, request: GetTaskRequest) -> JSONRPCResponse:
         logger.info(f"Received GetTask request: {request.model_dump_json(exclude_none=True)}")
-        # Implement task retrieval logic if needed, otherwise return not found
-        return JSONRPCResponse(id=request.id, result={"status": "Task not found"}) # Keep as dummy for now
-
-    async def _send_reply(self, original_request: SendTaskRequest):
-        """Simulates CrewAI processing and sends an independent reply."""
-        try:
-            received_message = original_request.params.message
-            input_text = received_message.parts[0].text if received_message and received_message.parts and isinstance(received_message.parts[0], TextPart) else ""
-
-            # Infinite loop prevention
-            if input_text.startswith("CrewAI processed (mock") or input_text.startswith("ADK received:"):
-                 logger.info("Received a reply message, not sending another reply to prevent loop.")
-                 return
-
-            # --- Simulate CrewAI processing (Mock) ---
-            logger.info(f"Simulating CrewAI processing for task {original_request.params.id}")
-            # Define CrewAI structure (Agent, Task, Crew) without LLM
-            mock_agent = Agent(role='Mock Processor', goal='Process input', backstory='Mock', verbose=False)
-            process_task = CrewTask(description=f'Process: {input_text}', expected_output='Confirmation', agent=mock_agent)
-            crew = Crew(agents=[mock_agent], tasks=[process_task], process=Process.sequential)
-            try:
-                # Run kickoff in executor (might do nothing without LLM, or raise error)
-                loop = asyncio.get_running_loop()
-                kickoff_func = crew.kickoff
-                await loop.run_in_executor(None, kickoff_func)
-                result_text = f"CrewAI processed (mock structure, no LLM): Input '{input_text[:30]}...'"
-            except Exception as kickoff_error:
-                logger.warning(f"CrewAI kickoff failed during reply (expected if no LLM): {kickoff_error}")
-                result_text = f"CrewAI processed (mock structure, no LLM): Input '{input_text[:30]}...'. (Kickoff skipped/failed)"
-            logger.info(f"CrewAI processing simulation finished for task {original_request.params.id}")
-            # --- End Mock CrewAI processing ---
-
-            # Prepare reply message
-            reply_message_payload = Message(role="user", parts=[TextPart(text=result_text)])
-            reply_task_id = f"reply-{uuid.uuid4()}"
-            reply_task_params = {
-                "id": reply_task_id,
-                "message": reply_message_payload.model_dump(exclude_none=True)
-            }
-
-            # Get target info (ADK agent)
-            target_config = self.config.get("target_agent")
-            if not target_config:
-                logger.error("Target agent config not found for sending reply.")
-                return
-            target_url = f"http://{target_config.get('address', 'localhost')}:{target_config.get('port', 8001)}/"
-
-            # Initialize client if needed
-            if self.client is None or self.client.url != target_url:
-                 self.client = A2AClient(url=target_url)
-
-            logger.info(f"Sending reply message to {target_url}...")
-            reply_response = await self.client.send_task(reply_task_params)
-            logger.info(f"Received response for reply message: {reply_response.model_dump_json()}")
-
-        except Exception as e:
-            logger.error(f"Error sending reply message: {e}", exc_info=True)
-
+        return JSONRPCResponse(id=request.id, result={"status": "Task not found"}) # Keep as dummy
 
     async def on_send_task(self, request: SendTaskRequest) -> JSONRPCResponse:
-        """Handles incoming tasks/send requests."""
+        """Handles incoming tasks/send requests and returns the result synchronously."""
         logger.info(f"Received SendTask request: {request.model_dump_json(exclude_none=True)}")
+        task_id = request.params.id
+        session_id = request.params.sessionId
+        received_message = request.params.message
 
-        # Schedule the reply sending in the background
-        asyncio.create_task(self._send_reply(request))
+        # Extract text from the message parts
+        input_text = ""
+        if received_message and received_message.parts:
+            for part in received_message.parts:
+                if isinstance(part, TextPart):
+                    input_text += part.text + "\n"
+        input_text = input_text.strip()
 
-        # Immediately return an acknowledgement response in the expected Task format
-        ack_status = TaskStatus(state=TaskState.SUBMITTED) # Indicate task is received
-        ack_task = Task(id=request.params.id, sessionId=request.params.sessionId, status=ack_status)
-        return JSONRPCResponse(id=request.id, result=ack_task)
+        if not input_text:
+            logger.warning("No text found in the received message.")
+            task_status = TaskStatus(state=TaskState.FAILED, message=received_message)
+            task_result = Task(id=task_id, sessionId=session_id, status=task_status)
+            return JSONRPCResponse(id=request.id, result=task_result)
+
+        try:
+            # Define CrewAI Agent and Task without LLM
+            mock_agent = Agent(
+                role='Mock Processor',
+                goal='Process input text without LLM.',
+                backstory='I am a mock agent using CrewAI structure.',
+                verbose=True,
+                allow_delegation=False
+            )
+            process_task = CrewTask(
+                description=f'Process the following text (mock):\n\n{input_text}',
+                expected_output='A confirmation message indicating processing.',
+                agent=mock_agent
+            )
+            crew = Crew(
+                agents=[mock_agent],
+                tasks=[process_task],
+                process=Process.sequential,
+                verbose=True
+            )
+
+            logger.info(f"Starting mock CrewAI task structure for A2A task ID: {task_id}")
+            loop = asyncio.get_running_loop()
+            kickoff_func = crew.kickoff
+            try:
+                crew_result = await loop.run_in_executor(None, kickoff_func)
+                logger.info(f"Mock CrewAI task finished for A2A task ID: {task_id}. Result: {crew_result}")
+                result_text = f"CrewAI processed (mock structure, no LLM): {crew_result if crew_result else 'No specific output from kickoff'}"
+                task_state = TaskState.COMPLETED
+            except Exception as kickoff_error:
+                logger.warning(f"CrewAI kickoff failed (possibly requires LLM?): {kickoff_error}", exc_info=True)
+                result_text = f"Mock processing complete for input: '{input_text[:30]}...'. (Kickoff failed/skipped)"
+                task_state = TaskState.COMPLETED
+
+            response_message = Message(role="agent", parts=[TextPart(text=result_text)])
+            task_status = TaskStatus(state=task_state, message=response_message)
+            history = [received_message, response_message]
+
+        except Exception as e:
+            logger.error(f"Error during CrewAI structure simulation for task {task_id}: {e}", exc_info=True)
+            history = [received_message] if received_message else []
+            error_message = Message(role="agent", parts=[TextPart(text=f"Error processing task: {e}")])
+            task_status = TaskStatus(state=TaskState.FAILED, message=error_message)
+            if 'error_message' in locals():
+                 history.append(error_message)
+
+        task_result = Task(id=task_id, sessionId=session_id, status=task_status, history=history)
+        return JSONRPCResponse(id=request.id, result=task_result)
 
     async def on_send_task_subscribe(self, request: SendTaskStreamingRequest):
         logger.info(f"Received SendTaskStreaming request: {request.model_dump_json(exclude_none=True)}")
-        # Dummy response for now, streaming not implemented in mock
         yield JSONRPCResponse(id=request.id, result={"task_id": request.params.id, "status": "Task received, streaming mock not implemented"})
 
     async def on_cancel_task(self, request: CancelTaskRequest) -> JSONRPCResponse:
@@ -124,7 +121,6 @@ class CrewAiTaskManager(TaskManager):
 
     async def on_resubscribe_to_task(self, request: TaskResubscriptionRequest):
          logger.info(f"Received TaskResubscription request: {request.model_dump_json(exclude_none=True)}")
-         # Dummy response for now
          yield JSONRPCResponse(id=request.id, result={"status": "Resubscription mock not implemented"})
 
 
@@ -179,18 +175,21 @@ async def main():
     agent_id = config.get("agent_id", "default-crewai-agent")
     listen_port = config.get("listen_port", 8002)
     target_config = config.get("target_agent")
+    # Read public URL from environment variable, fallback to config/default
+    agent_public_url = os.environ.get("AGENT_PUBLIC_URL", f"http://localhost:{listen_port}/")
+    logger.info(f"Using public URL: {agent_public_url}")
 
     # Define the Agent Card
     agent_card = AgentCard(
         name=agent_id,
         description="A sample agent built with CrewAI (mock execution) speaking A2A.", # Updated description
-        url=f"http://localhost:{listen_port}/",
+        url=agent_public_url, # Use the public URL from env var
         version="0.1.0",
         capabilities=AgentCapabilities(streaming=False, pushNotifications=False, stateTransitionHistory=False),
         skills=[AgentSkill(id="basic-chat-mock", name="Basic Chat Mock", description="Handles basic chat interactions with mock processing.")] # Updated skill
     )
 
-    task_manager = CrewAiTaskManager(config) # Pass config to TaskManager
+    task_manager = CrewAiTaskManager() # Config no longer needed
 
     server = A2AServer(
         host="0.0.0.0",

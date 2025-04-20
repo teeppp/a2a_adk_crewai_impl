@@ -2,35 +2,46 @@
 
 ## 1. 目的
 
-異なるエージェントフレームワークである Google Agent Development Kit (ADK) と CrewAI を使用し、Agent2Agent (A2A) プロトコルに基づいた基本的な双方向通信（テキストメッセージ送受信）を実現するサンプルを実装する。これにより、フレームワーク間の相互運用性を検証する。
+異なるエージェントフレームワークである Google Agent Development Kit (ADK) と CrewAI を使用し、Agent2Agent (A2A) プロトコルに基づいた基本的な双方向通信（テキストメッセージ送受信）を実現するサンプルを実装する。これにより、フレームワーク間の相互運用性を検証する。コンテナ化により、環境構築の容易化と共通コードの効率的な管理を目指す。
 
 ## 2. 実装概要
 
 ### 2.1. 目標
 
-*   ADKエージェントとCrewAIエージェント間で、A2Aプロトコルを用いた基本的なテキストメッセージを送受信する。
+*   ADKエージェント、CrewAIエージェント、Streamlit UIをそれぞれDockerコンテナとして起動する。
+*   各コンテナからサブモジュール内の共通コードを参照可能にする。
+*   Streamlit UIから各エージェントへA2Aリクエストを送信し、同期的な応答を受信する。
+*   エージェント間でA2Aメッセージを送受信する（起動時の疎通確認）。
 
 ### 2.2. 構成
 
-ADKエージェントとCrewAIエージェントは、それぞれ独立したPythonプロセスとして実行され、A2Aプロトコルに従って直接通信する。各エージェントはA2Aサーバー機能（待ち受け）とA2Aクライアント機能（送信）を持つ。
+Docker Compose を使用して3つのサービス（ADKエージェント、CrewAIエージェント、Streamlitアプリ）を起動する。共通コード (`third_party/google_a2a/samples/python/common`) はVolumeマウントを通じて各コンテナ内の `/app/common` に配置され、`PYTHONPATH` 設定によりインポート可能になる。
 
 ```mermaid
 graph LR
-    subgraph ADK Environment ["ADK実行環境 (localhost:8001)"]
-        ADK_Agent[("ADK Agent")]
-    end
-    subgraph CrewAI Environment ["CrewAI実行環境 (localhost:8002)"]
-        CrewAI_Agent[("CrewAI Agent")]
+    subgraph Docker Network
+        subgraph User Interface Container
+            StreamlitApp["Streamlit App (Client @ :8501)"]
+        end
+
+        subgraph Agent Server Containers
+            ADKServer["ADK Agent (Server @ :8001)"]
+            CrewAIServer["CrewAI Agent (Server @ :8002)"]
+        end
+
+        StreamlitApp -- "A2A Request" --> ADKServer
+        ADKServer -- "A2A Response" --> StreamlitApp
+
+        StreamlitApp -- "A2A Request" --> CrewAIServer
+        CrewAIServer -- "A2A Response" --> StreamlitApp
+
+        ADKServer <-->|A2A Request/Response| CrewAIServer
     end
 
-    ADK_Agent -- "A2A: tasks/send\n(Hello from ADK)" --> CrewAI_Agent
-    CrewAI_Agent -- "A2A: tasks/send\n(Hello from CrewAI)" --> ADK_Agent
-
-    style ADK_Agent fill:#f9f,stroke:#333,stroke-width:2px
-    style CrewAI_Agent fill:#ccf,stroke:#333,stroke-width:2px
+    style StreamlitApp fill:#e6f2ff,stroke:#333,stroke-width:2px
+    style ADKServer fill:#f9f,stroke:#333,stroke-width:2px
+    style CrewAIServer fill:#ccf,stroke:#333,stroke-width:2px
 ```
-
-起動時に互いにテストメッセージを送信し、正常に送受信できることを確認する。
 
 ## 3. フレームワーク選定の背景
 
@@ -39,194 +50,70 @@ A2Aプロトコル対応状況を主要フレームワークについて調査�
 *調査対象: ADK, CrewAI, LangGraph, LangChain, AutoGen, UAgent(Fetch.ai)*
 *調査結果詳細は `docs/research_notes/a2a_framework_research_20250417_141700.md` を参照。*
 
-**注意:** A2Aプロトコルおよび各フレームワークの対応状況は変化する可能性があるため、最新情報を要確認。
-
-## 4. 環境構築
+## 4. 環境構築 (Docker Compose)
 
 ### 4.1. 前提条件
 
-*   Python >= 3.12
-*   uv (Python Package Installer and Resolver)
+*   Docker および Docker Compose
 *   Git
 
-### 4.2. プロジェクトディレクトリ準備
+### 4.2. リポジトリとサブモジュールの準備
 
 ```bash
-mkdir a2a_adk_crewai_impl
+git clone <このプロジェクトのリポジトリURL> a2a_adk_crewai_impl
 cd a2a_adk_crewai_impl
+git submodule update --init --recursive
 ```
 
-### 4.3. Google A2A リポジトリのクローン
+### 4.3. コンテナのビルドと起動
 
-A2Aプロトコル仕様、共通コード、サンプルを含むリポジトリをプロジェクト内にクローンする。
-
-```bash
-git clone https://github.com/google/A2A.git A2A_repo
-```
-*このリポジトリ内の `common` ディレクトリのコードを利用する。*
-
-### 4.4. Python 環境準備 (uv)
-
-プロジェクトルートでPython 3.12を使用するよう設定（必要に応じてインストール）。
-
-```bash
-# プロジェクトルート (a2a_adk_crewai_impl) で実行
-# uv python install 3.12
-```
-
-### 4.5. 依存関係管理 (uv ワークスペース)
-
-`adk_agent`, `crewai_agent`, `A2A_repo/samples/python` をメンバーとする `uv` ワークスペースを定義する。これにより、ローカルの共通コード (`A2A_repo/samples/python` 内) への依存関係を管理する。
-
-```toml:a2a_adk_crewai_impl/pyproject.toml
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[project]
-name = "a2a-adk-crewai-impl-workspace" # Workspace root placeholder name
-version = "0.1.0"
-requires-python = ">=3.12"
-
-[tool.uv.workspace]
-members = [
-    "adk_agent",
-    "crewai_agent",
-    "A2A_repo/samples/python" # Provides 'a2a-samples' package
-]
-```
-
-### 4.6. 依存関係のインストール (uv sync)
-
-プロジェクトルートで以下を実行し、全メンバーの依存関係を解決・インストールする。
-
-```bash
-# プロジェクトルート (a2a_adk_crewai_impl) で実行
-uv sync --all-members
-```
-*これにより、各エージェントディレクトリ (`adk_agent`, `crewai_agent`) 内に `.venv` が作成され、必要なパッケージがインストールされる。*
-
-**注意:** 実装時には `httpx` のバージョン競合が発生したため、`A2A_repo/samples/python/pyproject.toml` の `httpx` バージョン指定を `>=0.23.0` に修正した。依存関係エラーが発生した場合は、各 `pyproject.toml` を確認すること。
+プロジェクトルートで `docker compose up --build` を実行する。
 
 ## 5. 実装コード解説
 
-### 5.1. 共通コンポーネントの活用
+### 5.1. 依存関係管理と共通コード参照
 
-Google A2Aリポジトリ (`A2A_repo/samples/python`) 内の以下を利用。
-
-*   `common/server/server.py`: `A2AServer` (Starlette/Uvicornベース)
-*   `common/client/client.py`: `A2AClient` (httpxベース)
-*   `common/types.py`: A2AプロトコルのPydanticモデル
-*   `common/server/task_manager.py`: `TaskManager` 抽象基底クラス
-
-これらは `uv` ワークスペース経由で `a2a-samples` パッケージとして参照される。
+*   **方針:** Docker ComposeとVolumeマウント、PYTHONPATH設定により、サブモジュール内の共通コードを各コンテナから直接インポートする方式を採用。これによりコード重複を回避。
+*   **共通コード:** サブモジュール `third_party/google_a2a/samples/python/common` を各コンテナの `/app/common` にマウント。
+*   **`PYTHONPATH`:** 各コンテナの環境変数 `PYTHONPATH=/app` を設定。
+*   **`pyproject.toml`:** 各アプリケーションの `pyproject.toml` には、アプリケーション固有の依存関係のみを記述。共通コードへの依存や共通コード自体の依存ライブラリは記述しない。
+*   **Dockerfile:** `uv` 公式イメージをベースとし、`uv sync` で各アプリ固有の依存関係のみをインストール。
 
 ### 5.2. ADKエージェント (`adk_agent/main.py`)
 
-*   **設定読み込み:** `adk_config.yaml` からAgent ID, port, 接続先情報をロード。
-*   **`AgentCard` 定義:** `common.types.AgentCard` に従い定義。必須フィールド (`name`, `url`, `version`, `capabilities`, `skills`) を設定。
-*   **`TaskManager` 実装:** `AdkTaskManager` として `TaskManager` を継承。`on_send_task` で受信リクエストをログ出力し、受信メッセージを含む `Task` オブジェクトをレスポンス (`JSONRPCResponse`) として返す。
-*   **A2Aサーバー起動:** `A2AServer` をインスタンス化し、`uvicorn.Server` と `asyncio` を使って非同期起動。
-*   **メッセージ送信:** `A2AClient` を使い、`send_initial_message` 関数内で接続先 (CrewAI) に `tasks/send` リクエストを送信。`TaskSendParams` に必須の `id` (UUID) と `message` を含める。
-
-```python
-# Key parts of adk_agent/main.py
-import uuid
-from common.server.server import A2AServer
-from common.server.task_manager import TaskManager
-from common.types import AgentCard, AgentCapabilities, AgentSkill, Task, TaskStatus, TaskState, Message, TextPart, JSONRPCResponse, SendTaskRequest
-from common.client.client import A2AClient
-import asyncio
-import uvicorn
-import yaml
-import logging
-
-# ... (TaskManager, load_config, send_initial_message implementations) ...
-
-async def main():
-    # ... (Load config) ...
-    agent_card = AgentCard(...) # Define AgentCard
-    task_manager = AdkTaskManager()
-    server = A2AServer(...) # Instantiate server
-    uvicorn_config = uvicorn.Config(...)
-    uvicorn_server = uvicorn.Server(uvicorn_config)
-    server_task = asyncio.create_task(uvicorn_server.serve())
-    await asyncio.sleep(2) # Wait for server start
-    await send_initial_message(target_config) # Send message
-    await server_task # Keep running
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
+*   `from common...` でマウントされた共通コードをインポート。
+*   `on_send_task` でリクエストを受け取り、同期的に処理結果（モック応答＋履歴）を含む `Task` オブジェクトをレスポンスとして返す。
+*   起動時に `send_initial_message` で相手 (CrewAI) に `tasks/send` リクエストを送信。
 
 ### 5.3. CrewAIエージェント (`crewai_agent/main.py`)
 
-ADKエージェントとほぼ同様の構成。主な違いは以下。
+*   ADKエージェントと同様の構成。
+*   `on_send_task` 内で、CrewAIの `Agent`, `Task`, `Crew` をインスタンス化するが、`kickoff()` はLLMなしで実行（またはエラーハンドリング）し、固定のモック応答文字列を含む `Task` オブジェクトを同期的に返す。**（モック実装）**
 
-*   `TaskManager` クラス名 (`CrewAiTaskManager`)
-*   `AgentCard` の `name`, `description`
-*   `send_initial_message` の接続先ポート (`8001`)
+### 5.4. Streamlitアプリ (`a2a_streamlit_app/`)
 
-### 5.4. 依存関係管理 (`pyproject.toml`)
-
-*   **ルート (`a2a_adk_crewai_impl/pyproject.toml`):** `[tool.uv.workspace]` でメンバー (`adk_agent`, `crewai_agent`, `A2A_repo/samples/python`) を定義。
-*   **ADKエージェント (`adk_agent/pyproject.toml`):**
-    ```toml
-    [project]
-    dependencies = [
-        "a2a-samples", # Workspace dependency
-        "pyyaml", "uvicorn", "starlette", "sse-starlette", "pydantic",
-        "google-adk",
-    ]
-    [tool.uv.sources]
-    a2a-samples = { workspace = true }
-    ```
-*   **CrewAIエージェント (`crewai_agent/pyproject.toml`):**
-    ```toml
-    [project]
-    dependencies = [
-        "a2a-samples", # Workspace dependency
-        "pyyaml", "uvicorn", "starlette", "sse-starlette", "pydantic",
-        "crewai",
-    ]
-    [tool.uv.sources]
-    a2a-samples = { workspace = true }
-    ```
-
-**注意点:**
-
-*   `uv` はネストされたワークスペースをサポートしないため、`A2A_repo/samples/python/pyproject.toml` から `[tool.uv.workspace]` を削除した。
-*   `a2a-samples` と `crewai` の `httpx` バージョン競合のため、`A2A_repo/samples/python/pyproject.toml` の `httpx` 指定を `>=0.23.0` に変更した。
+*   `a2a_client_utils.py` で `from common...` を使用してマウントされた共通クライアントコードをインポート。
+*   `main.py` で `send_a2a_task` を呼び出し、選択されたエージェントに `tasks/send` リクエストを送信。
+*   エージェントからの同期的な応答 (`Task` オブジェクト) を受け取り、チャット履歴に表示。
 
 ## 6. 動作確認
 
-### 6.1. 実行手順
-
-1.  **ターミナル1: CrewAI エージェント起動**
-    ```bash
-    cd /path/to/a2a_adk_crewai_impl/crewai_agent
-    uv run python main.py
-    ```
-    *(サーバーが `http://0.0.0.0:8002` で起動)*
-
-2.  **ターミナル2: ADK エージェント起動**
-    ```bash
-    cd /path/to/a2a_adk_crewai_impl/adk_agent
-    uv run python main.py
-    ```
-    *(サーバーが `http://0.0.0.0:8001` で起動)*
-
-### 6.2. 期待されるログ出力
-
-*   両エージェントが起動し、互いに `tasks/send` リクエストを送信。
-*   各エージェントログに、相手への送信ログ (`Sending test message...`)、相手からのレスポンス受信ログ (`Received response...`、`message` 含む)、相手からのリクエスト受信ログ (`Received SendTask request...`) がエラーなく表示される。
+1.  プロジェクトルートで `docker compose up --build` を実行。
+2.  各コンテナログで起動と初期通信を確認。
+3.  ブラウザで `http://localhost:8501` にアクセス。
+4.  サイドバーでエージェントURL (`http://adk_agent:8001` または `http://crewai_agent:8002`) を追加。
+5.  エージェントを選択しメッセージを送信。チャット履歴に応答（モック）が表示されることを確認。
 
 ## 7. 考察・課題
 
-*   **A2A連携:** ADKとCrewAI間で基本的なメッセージ交換が可能であることを確認。
-*   **共通コンポーネント:** Google A2Aリポジトリの共通コードはA2A実装の負担を軽減する上で有用。
-*   **`uv` ワークスペース:** ローカル依存関係管理に有効だが、ネスト非対応や依存関係指定方法 (`{ workspace = true }`) に注意が必要。
-*   **依存関係競合:** `httpx` のバージョン競合が発生。バージョン調整で対応。
-*   **プロトコル理解:** `pydantic` モデル (`AgentCard`, `Task`, `TaskStatus` 等) の正確な理解と利用が重要。特にレスポンス形式 (`Task` オブジェクト、`message` 含む `TaskStatus`)。
-*   **非同期処理:** `asyncio` と `uvicorn` の連携 (`uvicorn.Server`, `await server.serve()`)。
-*   **その他:** 実装過程で `pydantic` バリデーションエラー、`asyncio` ランタイムエラー、`uv` 設定エラー、依存関係競合などが複数発生。エラーメッセージの確認と試行錯誤により解決。
+*   **コンテナ化:** 共通コードの重複を避け、環境分離を実現。`PYTHONPATH` とVolumeマウントでサブモジュールコードを利用できた。
+*   **依存関係:** アプリ固有の依存関係のみを各 `pyproject.toml` で管理。共通コードの依存はコンテナ環境では `PYTHONPATH` 経由での利用のため明示的なインストール不要となった。
+*   **プロトコル理解:** `tasks/send` の同期応答の形式 (`Task` オブジェクト) を正しく返す必要があった。
+*   **CrewAIモック:** LLMなしでの `kickoff()` 実行はエラーになる可能性があり、エラーハンドリングを追加したモック実装とした。
+
+## 8. 今後の課題
+
+*   **CrewAIの実際のロジック実装:** `crewai_agent/main.py` のモック処理をLLM連携を含む実装に置き換える。
+*   **エラーハンドリング強化。**
+*   **セキュリティ実装。**
+*   **共通コードの依存関係:** 共通コード側で依存関係が追加された場合、それを各アプリの `pyproject.toml` に追加するか、共通コード自体をビルドしてパッケージとしてインストールする方式に変更する必要がある。

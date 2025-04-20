@@ -3,20 +3,21 @@ name = "adk-agent"
 version = "0.1.0"
 description = "A2A ADK Agent Implementation"
 readme = "README.md"
-requires-python = ">=3.12" # Match the installed version
+requires-python = ">=3.12"
 dependencies = [
+    # Dependencies specific to ADK agent itself
     "pyyaml",
     "uvicorn",
     "starlette",
     "sse-starlette",
     "pydantic",
     "google-adk",
-    # Add dependencies required by the copied 'common' code
-    "httpx>=0.23.0",
+    # Add dependencies required by the mounted 'common' code
+    "httpx>=0.23.0", # Version adjusted for compatibility previously
     "httpx-sse>=0.4.0",
     "jwcrypto>=1.5.6",
     "pyjwt>=2.10.1",
     "typing-extensions>=4.12.2",
 ]
 
-# [tool.uv.sources] section is no longer needed for this path dependency
+# [tool.uv.sources] section removed

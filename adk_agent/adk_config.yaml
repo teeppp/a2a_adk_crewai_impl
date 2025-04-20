@@ -6,5 +6,10 @@ listen_port: 8001        # Port this agent will listen on for A2A connections
 # Details of the agent to connect to
 target_agent:
   agent_id: "crewai-agent-001" # Target agent's ID
-  address: "localhost"         # Target agent's hostname or IP address
+  address: "crewai_agent"      # Use the service name for container communication
   port: 8002                   # Target agent's listening port
+# Vertex AI Configuration
+vertex_ai:
+  project_id: "YOUR_GCP_PROJECT_ID"  # Replace with your GCP project ID
+  location: "us-central1"           # Replace with your Vertex AI region if different
+  model_name: "gemini-1.5-pro-preview-0409" # Replace with your desired model

@@ -2,34 +2,73 @@
 
 ## 概要
 
-このプロジェクトは、Google Agent Development Kit (ADK) で作成されたエージェントと、CrewAI フレームワークで作成されたエージェント間で、Agent2Agent (A2A) プロトコルを用いた基本的な双方向通信（テキストメッセージの送受信）を行うサンプル実装です。
+このプロジェクトは、Google Agent Development Kit (ADK) で作成されたエージェントと、CrewAI フレームワークで作成されたエージェントが、Agent2Agent (A2A) プロトコルを用いて相互に通信するサンプル実装です。
 
-異なるフレームワーク間のエージェント連携の基礎をデモンストレーションすることを目的としています。
+Streamlitを用いたチャットUIから各エージェントに指示を送れるほか、エージェント同士が直接通信する基盤も構築されており、異なるフレームワーク間の連携と相互運用性の基礎をデモンストレーションすることを目的としています。
+
+Docker Compose を使用して、各コンポーネント（ADKエージェント、CrewAIエージェント、Streamlitアプリ）をコンテナとして起動します。
+
+### 全体構成
+
+Streamlitアプリが各エージェントサーバーにA2Aリクエストを送信し、同期的な応答を受け取ります。加えて、ADKエージェントとCrewAIエージェントは、互いに直接A2Aメッセージを送受信する能力を持っています（現在のサンプルでは主に起動時の疎通確認で使用）。
+
+```mermaid
+graph LR
+    subgraph Docker Network
+        subgraph User Interface Container
+            StreamlitApp["Streamlit App (Client @ :8501)"]
+        end
+
+        subgraph Agent Server Containers
+            ADKServer["ADK Agent (Server @ :8001)"]
+            CrewAIServer["CrewAI Agent (Server @ :8002)"]
+        end
+
+        StreamlitApp -- "A2A Request" --> ADKServer
+        ADKServer -- "A2A Response" --> StreamlitApp
+
+        StreamlitApp -- "A2A Request" --> CrewAIServer
+        CrewAIServer -- "A2A Response" --> StreamlitApp
+
+        ADKServer <-->|A2A Request/Response| CrewAIServer
+    end
+
+    style StreamlitApp fill:#e6f2ff,stroke:#333,stroke-width:2px
+    style ADKServer fill:#f9f,stroke:#333,stroke-width:2px
+    style CrewAIServer fill:#ccf,stroke:#333,stroke-width:2px
+```
+*矢印はコンテナ間のA2A通信を示します。*
 
 ## ディレクトリ構成
 
 ```
 a2a_adk_crewai_impl/
-├── A2A_repo/             # Google A2Aリポジトリのクローン (samples/python を利用)
-├── adk_agent/            # ADKエージェント関連ファイル
-│   ├── main.py           # ADKエージェントのメインスクリプト (A2Aサーバー含む)
-│   ├── adk_config.yaml   # ADKエージェントの設定ファイル
-│   ├── pyproject.toml    # Pythonプロジェクト設定 (uv)
-│   └── .venv/            # 仮想環境 (uvにより自動生成)
-├── crewai_agent/         # CrewAIエージェント関連ファイル
-│   ├── main.py           # CrewAIエージェントのメインスクリプト (A2Aサーバー含む)
-│   ├── crewai_config.yaml# CrewAIエージェントの設定ファイル
-│   ├── pyproject.toml    # Pythonプロジェクト設定 (uv)
-│   └── .venv/            # 仮想環境 (uvにより自動生成)
-├── pyproject.toml        # ルートワークスペース設定 (uv)
+├── third_party/google_a2a/ # Google A2Aリポジトリ (サブモジュール)
+├── adk_agent/            # ADKエージェント関連
+│   ├── main.py
+│   ├── adk_config.yaml
+│   ├── pyproject.toml
+│   └── Dockerfile
+├── crewai_agent/         # CrewAIエージェント関連
+│   ├── main.py
+│   ├── crewai_config.yaml
+│   ├── pyproject.toml
+│   └── Dockerfile
+├── a2a_streamlit_app/    # StreamlitチャットUI関連
+│   ├── main.py
+│   ├── a2a_client_utils.py
+│   ├── state_manager.py
+│   ├── pyproject.toml
+│   └── Dockerfile
+├── compose.yaml          # Docker Compose設定ファイル
 └── README.md             # このファイル
 ```
+*注: 共通コード (`third_party/google_a2a/samples/python/common`) は、`compose.yaml` の設定により各コンテナ内の `/app/common` にマウントされ、`PYTHONPATH` を通じてインポートされます。*
 
 ## 環境構築
 
 1.  **前提条件:**
-    *   Python 3.12 以上
-    *   [uv](https://github.com/astral-sh/uv) (Pythonパッケージインストーラー兼リゾルバー)
+    *   Docker および Docker Compose (または Docker Desktop)
     *   Git
 
 2.  **リポジトリのクローン:**
@@ -38,61 +77,44 @@ a2a_adk_crewai_impl/
     cd a2a_adk_crewai_impl
     ```
 
-3.  **Google A2A リポジトリのクローン:**
-    プロジェクトルート (`a2a_adk_crewai_impl`) 内に Google の A2A リポジトリを `A2A_repo` という名前でクローンします。
+3.  **Google A2A サブモジュールの準備:**
     ```bash
-    git clone https://github.com/google/A2A.git A2A_repo
+    # サブモジュールを初期化・更新
+    git submodule update --init --recursive
     ```
+    *このプロジェクトでは `third_party/google_a2a/samples/python/common` 内のコードを利用します。*
 
-4.  **Python 環境の準備 (uv):**
-    プロジェクトルートで `uv` を使用して Python 3.12 をインストールします (既に適切なバージョンがあればスキップ可)。
-    ```bash
-    # 必要に応じて実行
-    # uv python install 3.12
-    ```
-
-5.  **依存関係のインストール (uv sync):**
-    `uv` のワークスペース機能を利用して、各エージェントの依存関係をインストールします。プロジェクトルートで以下のコマンドを実行します。
-    ```bash
-    uv sync --all-members
-    ```
-    これにより、`adk_agent` と `crewai_agent` の両方の仮想環境に必要なパッケージがインストールされます。
-
-## 設定ファイル
-
-各エージェントの動作は、それぞれのディレクトリにある `.yaml` ファイルで設定します。
-
-*   `adk_agent/adk_config.yaml`: ADKエージェントの設定 (自身のAgent ID、待ち受けポート、接続先CrewAIエージェント情報)
-*   `crewai_agent/crewai_config.yaml`: CrewAIエージェントの設定 (自身のAgent ID、待ち受けポート、接続先ADKエージェント情報)
-
-デフォルトでは、ADKエージェントはポート `8001`、CrewAIエージェントはポート `8002` で待ち受けます。
+4.  **(オプション) `.env` ファイルの作成:**
+    CrewAIエージェントが将来的に外部LLM APIキーなどを必要とする場合に備え、プロジェクトルートに `.env` ファイルを作成して環境変数を定義できます (例: `OPENAI_API_KEY=your_key`)。`compose.yaml` で読み込む設定を追加する必要があります。
 
 ## 実行方法
 
-1.  **ターミナル1: CrewAI エージェントの起動**
-    ```bash
-    cd /path/to/a2a_adk_crewai_impl/crewai_agent
-    uv run python main.py
-    ```
-    サーバーが `http://0.0.0.0:8002` で起動します。
+プロジェクトルート (`a2a_adk_crewai_impl`) で以下のコマンドを実行します。
 
-2.  **ターミナル2: ADK エージェントの起動**
-    ```bash
-    cd /path/to/a2a_adk_crewai_impl/adk_agent
-    uv run python main.py
-    ```
-    サーバーが `http://0.0.0.0:8001` で起動します。
+```bash
+docker compose up --build
+```
+
+これにより、以下のサービスがコンテナとして起動します。
+
+*   **ADKエージェント:** `http://localhost:8001` でA2Aリクエストを待ち受けます。
+*   **CrewAIエージェント:** `http://localhost:8002` でA2Aリクエストを待ち受けます。
+*   **Streamlitアプリ:** `http://localhost:8501` でアクセス可能なUIを提供します。
+
+コンテナを停止するには、`docker compose down` を実行します。
 
 ## 期待される動作
 
-1.  両エージェントが起動すると、それぞれが設定ファイルに基づいて相手のエージェントにテストメッセージ (`tasks/send` リクエスト) を送信します。
-2.  各エージェントのターミナルログに、相手へのメッセージ送信ログ (`Sending test message to ...`) と、相手からのレスポンス受信ログ (`Received response from target agent: ...`) が表示されます。
-3.  各エージェントのターミナルログに、相手から送信されたテストメッセージの受信ログ (`Received SendTask request: ...`) が表示されます。
-
-これにより、基本的な双方向通信が確立されていることを確認できます。
+1.  `docker compose up` を実行すると、各サービスのイメージがビルドされ、コンテナが起動します。
+2.  各エージェントコンテナのログに、起動メッセージと、もう一方のエージェントへの初期テストメッセージ送信および**同期的な応答**受信のログが出力されます。
+3.  ブラウザで `http://localhost:8501` にアクセスすると、Streamlitアプリが表示されます。
+4.  サイドバーでエージェントのURL (`http://adk_agent:8001` または `http://crewai_agent:8002` - コンテナ名でアクセス) を追加すると、Agent Card情報が表示されます。
+5.  エージェントを選択しメッセージを送信すると、選択されたエージェントコンテナのログにリクエスト受信ログが出力され、Streamlitアプリのチャット履歴にエージェントからの**同期的な応答**（現在はモック応答）が表示されます。
 
 ## 留意事項
 
-*   この実装は基本的なメッセージ送受信のデモンストレーションです。実際の CrewAI や ADK のタスク実行ロジックは含まれていません (`TaskManager` はダミー実装です)。
+*   この実装は基本的なメッセージ送受信のデモンストレーションです。実際の CrewAI や ADK のタスク実行ロジックは含まれていません (`TaskManager` はダミー/モック実装です)。
+*   **CrewAIエージェントは現在モック実装です。** A2Aリクエストを受け取ると、実際のCrewAIプロセス（LLM呼び出しなど）を実行する代わりに、固定の応答を返します。LLM連携を含む完全な実装は今後の課題です。
 *   エラーハンドリングやセキュリティ対策は最小限です。
 *   A2Aプロトコルは開発中のため、仕様変更により動作しなくなる可能性があります。
+*   共通コード (`common`) はサブモジュールから読み取り専用でマウントされています。共通コード自体を修正する場合は、サブモジュールリポジトリで行う必要があります。

@@ -1,0 +1,46 @@
+# docker-compose.yaml is deprecated, use compose.yaml
+
+services:
+  adk_agent:
+    build: ./adk_agent
+    ports:
+      - "8001:8001"
+    volumes:
+      # Mount common code from submodule into /app/common
+      - ./third_party/google_a2a/samples/python/common:/app/common:ro
+    environment:
+      PYTHONPATH: /app
+      AGENT_PUBLIC_URL: http://adk_agent:8001 # Add public URL environment variable
+    networks:
+      - a2a_network
+
+  crewai_agent:
+    build: ./crewai_agent
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./third_party/google_a2a/samples/python/common:/app/common:ro
+    environment:
+      PYTHONPATH: /app
+      AGENT_PUBLIC_URL: http://crewai_agent:8002 # Add public URL environment variable
+      # OPENAI_API_KEY: ${OPENAI_API_KEY} # Example for env vars if needed later
+    networks:
+      - a2a_network
+
+  streamlit_app:
+    build: ./a2a_streamlit_app
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./third_party/google_a2a/samples/python/common:/app/common:ro
+    environment:
+      PYTHONPATH: /app
+    depends_on:
+      - adk_agent
+      - crewai_agent
+    networks:
+      - a2a_network
+
+networks:
+  a2a_network:
+    driver: bridge
